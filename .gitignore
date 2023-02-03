@@ -26,8 +26,10 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-# checkpoint/
+checkpoint/
 data/
+low_conf_data/
+*.pt
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

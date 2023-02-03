@@ -26,13 +26,23 @@ np.random.seed(0)
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+transform_train = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+])
+
 transform_test = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
 ])
 
+trainset = torchvision.datasets.CIFAR10(
+    root='./data', train=True, download=True, transform=transform_train)
+trainloader = torch.utils.data.DataLoader(
+    trainset, batch_size=128, shuffle=True, num_workers=2)
+
 testset = torchvision.datasets.CIFAR10(
-    root='./data', train=False, download=True, transform=transform_test)
+    root='./data', train=False, download=False, transform=transform_test)
 testloader = torch.utils.data.DataLoader(
     testset, batch_size=100, shuffle=False, num_workers=2)
 
@@ -40,16 +50,18 @@ criterion = nn.CrossEntropyLoss()
 
 net = ResNet18()
 net = net.to(device)
-if device == 'cuda':
-    net = torch.nn.DataParallel(net)
-    cudnn.benchmark = True
+# if device == 'cuda':
+#     net = torch.nn.DataParallel(net)
+#     cudnn.benchmark = True
 
 if not os.path.isdir('graphs'):
     os.mkdir('graphs')
 
 assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
 
-checkpoint = torch.load('./checkpoint/ckpt.pth')
+# checkpoint = torch.load('./checkpoint/ckpt.pth')
+checkpoint = torch.load('./checkpoint/model_zeroed.pth')
+
 net.load_state_dict(checkpoint['net'])
 
 def get_reliability(net, conf_thresh):
@@ -123,6 +135,7 @@ labels_list = []
 
 with torch.no_grad():
     for images, labels in testloader:
+    # for images, labels in trainloader:
         #outputs are the the raw scores!
         
         logits = net(images.to(device))
