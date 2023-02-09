@@ -15,16 +15,16 @@ import argparse
 from models import *
 from utils import progress_bar
 import copy
+import shutil
 
 np.random.seed(0)
 
-parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
+parser = argparse.ArgumentParser(description='CVP')
 parser.add_argument('--lr', default=0.01, type=float, help='learning rate')
 
 # parser.add_argument('--epochs', type=int, help='num epochs')
 
 args = parser.parse_args()
-
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -46,37 +46,12 @@ trainloader = torch.utils.data.DataLoader(
 testset = torchvision.datasets.CIFAR10(
     root='./data', train=False, download=False, transform=transform_test)
 testloader = torch.utils.data.DataLoader(
-    testset, batch_size=1, shuffle=False, num_workers=2)
-
-# low_conf_set = torchvision.datasets.DatasetFolder(root='low_conf_data')
-# low_conf_loader = torch.utils.data.DataLoader(low_conf_set, 
-#     batch_size = len(os.listdir("low_conf_daata/images")) )
-
-# for batch_idx, (inputs, targets) in enumerate(testloader):
-#     print (batch_idx, inputs, targets)
-#     sys.exit(0)
-
-# test1 = torch.utils.data.Subset(trainset, [i for i in range(8000,10000)])
-# testloader = torch.utils.data.DataLoader(
-#     test1, batch_size=1, shuffle=False, num_workers=2)
+    testset, batch_size=100, shuffle=False, num_workers=2)
 
 classes = ('plane', 'car', 'bird', 'cat', 'deer',
            'dog', 'frog', 'horse', 'ship', 'truck')
 
 criterion = nn.CrossEntropyLoss()
-
-# net = ResNet18()
-# net = net.to(device)
-
-# with torch.no_grad():
-    # print(net.linear.weight.data)
-
-# print("FC layer shape:",net.linear.weight.data.shape)
-
-# print (net)
-
-
-# net_temp_params = copy.deepcopy(net.parameters())
 
 
 def predict(inputs, targets, optimizer, net, wt_zeroed_correct):
@@ -85,7 +60,7 @@ def predict(inputs, targets, optimizer, net, wt_zeroed_correct):
     outputs = net(inputs)
 
     _, predicted = outputs.max(1)
-    print (predicted, targets)
+    # print (predicted, targets)
     print ("output corretness? ", predicted.eq(targets).sum().item(), "/", targets.size(0))
     
     wt_zeroed_correct += predicted.eq(targets).sum().item()
@@ -95,6 +70,13 @@ def predict(inputs, targets, optimizer, net, wt_zeroed_correct):
 def get_low_conf_images(low_conf_thresh = 0.5):
     if not os.path.isdir('low_conf_data'):
         os.mkdir('low_conf_data')
+        os.mkdir('low_conf_data/images')
+        os.mkdir('low_conf_data/targets')
+    
+    elif len(os.listdir("low_conf_data/images"))>0:
+        print ("Removing existing files")
+        shutil.rmtree("low_conf_data/images")
+        shutil.rmtree("low_conf_data/targets")
         os.mkdir('low_conf_data/images')
         os.mkdir('low_conf_data/targets')
 
@@ -128,14 +110,25 @@ def get_low_conf_images(low_conf_thresh = 0.5):
         correct += predicted.eq(targets).sum().item()
         # print ("Correct:", correct )
 
-        is_correct = predicted.eq(targets).sum().item()
+        # is_correct = predicted.eq(targets).sum().item()
+        is_correct = predicted.eq(targets)
 
         # INFO: Gather all low conf images:
-        if confs_batch[0][0] ==1 and is_correct:
-            low_conf_inputs.append(inputs)
-            low_conf_targets.append(targets)
-            torch.save(inputs[0],f"low_conf_data/images/img_{batch_idx}.pt")
-            torch.save(targets[0],f"low_conf_data/targets/target_{batch_idx}.pt")
+        # Batch:
+        with torch.no_grad():
+            for i in range(len(confs_batch)):
+                if confs_batch[i][0] ==1 and is_correct[i]:
+                    low_conf_inputs.append(torch.tensor(inputs[i]).cpu().clone().detach())
+                    low_conf_targets.append(torch.tensor(targets[i]).cpu().clone().detach())
+                    torch.save(inputs[i],f"low_conf_data/images/img_{batch_idx}_{i}.pt")
+                    torch.save(targets[i],f"low_conf_data/targets/target_{batch_idx}_{i}.pt")
+
+        # One image at a time:
+        # if confs_batch[0][0] ==1 and is_correct:
+        #     low_conf_inputs.append(inputs)
+        #     low_conf_targets.append(targets)
+        #     torch.save(inputs[0],f"low_conf_data/images/img_{batch_idx}.pt")
+        #     torch.save(targets[0],f"low_conf_data/targets/target_{batch_idx}.pt")
         
         progress_bar(batch_idx, len(testloader))
 
@@ -144,8 +137,7 @@ def get_low_conf_images(low_conf_thresh = 0.5):
     return low_conf_inputs, low_conf_targets
         
 
-
-def identify_weights(low_conf_images=None, low_conf_targets=None, epoch=1, alpha = 0.001, batch_size = 100):    
+def identify_weights(low_conf_images=None, low_conf_targets=None, epoch=1, conf=0.5, alpha = 0.001, batch_size = 100):    
     correct = 0
     total = 0
 
@@ -210,17 +202,21 @@ def identify_weights(low_conf_images=None, low_conf_targets=None, epoch=1, alpha
 
     # INFO: set weights whose change is high for low conf images to 0 # gather indexes 
     bad_weight_indexes = []
+    weights_zeroed_current = []
     for i, row in enumerate(delta_w):
         for j, value in enumerate(row):
             if value>alpha:
                 bad_weight_indexes.append([i,j])
-                new_fc_weights[i][j] = 0
+                # new_fc_weights[i][j] = 0
+                initial_fc_weights[i][j] = 0
+                # weights_zeroed_current.append(new_fc_weights[i][j])
+                weights_zeroed_current.append(value)
     
+    # set current weights to the initial weights where some have been zeroed.
+    net.linear.weight.data = initial_fc_weights
+    
+    num_zeroed_weights = len(bad_weight_indexes)
     print (f"Making {len(bad_weight_indexes)} weights zeroes")
-    
-    # set to zero
-    # for i,j in bad_weight_indexes:
-    #     new_fc_weights[i][j] = 0
 
     # INFO: predict again
     wt_zeroed_correct = predict(inputs, targets, optimizer, net, wt_zeroed_correct)
@@ -228,28 +224,32 @@ def identify_weights(low_conf_images=None, low_conf_targets=None, epoch=1, alpha
     # print ("____________")
     print ("after zeroed correct:", wt_zeroed_correct, "total:",len(inputs))
 
-    print ()
-
     # saving model
     print('Saving..')
+    checkpoint_save_path = f'./checkpoint/model_zeroed_{conf}_{alpha}.pth'
     state = {
         'net': net.state_dict()
     }
     if not os.path.isdir('checkpoint'):
         os.mkdir('checkpoint')
-    torch.save(state, './checkpoint/model_zeroed.pth')
+    torch.save(state, checkpoint_save_path)
+
+    return checkpoint_save_path, num_zeroed_weights
 
 
+if __name__=="__main__":
+
+    # print ("Num low_conf = ", len(get_low_conf_images()[0]))
+
+    low_conf_images, low_conf_targets =get_low_conf_images(low_conf_thresh = 0.4)
+
+    print ("Num images: ", len(low_conf_images))
+    print (len(low_conf_targets))
+    print (low_conf_targets)
+
+    identify_weights()
 
 
-# identify_weights()
-# print ("Num low_conf = ", len(get_low_conf_images()[0]))
-
-low_conf_images, low_conf_targets =get_low_conf_images()
-
-print ("Num images: ", len(low_conf_images))
-
-identify_weights()
 
 
 
